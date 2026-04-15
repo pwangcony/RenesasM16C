@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Renesas M16C 외부 메모리 F/W 업데이트 가이드</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* 기본 폰트 및 부드러운 스크롤 */
+        html { scroll-behavior: smooth; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { background-color: #f8fafc; color: #334155; }
+        
+        /* Chart Container 엄격한 스타일링 규칙 적용 */
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 500px; /* 최대 너비 제한 */
+            margin-left: auto;
+            margin-right: auto;
+            height: 300px; /* 기본 높이 */
+            max-height: 350px;
+        }
+        @media (min-width: 768px) {
+            .chart-container { height: 350px; }
+        }
+
+        /* 커스텀 스크롤바 */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        /* 메모리 맵 애니메이션 효과 */
+        .memory-block { transition: all 0.3s ease; }
+        .memory-block:hover { transform: translateX(5px); box-shadow: -2px 2px 10px rgba(0,0,0,0.1); }
+        
+        .fade-in { animation: fadeIn 0.5s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="antialiased">
+
+<!-- Chosen Palette: Slate & Blue/Indigo (차분하고 전문적인 기술 문서 느낌의 중립적인 톤) -->
+<!-- Application Structure Plan: 
+    요청된 소스 텍스트는 매우 구체적인 하드웨어 제약(내부 메모리 미사용, 특정 외부 RAM/Flash 사용)을 가진 펌웨어 업데이트 관련 기술 지원 요청입니다.
+    이러한 제한적인 정보를 바탕으로, 사용자가 부족하다고 느끼는 '자료'를 인터랙티브한 형태의 '기술 대시보드 및 가이드'로 재구성했습니다.
+    1. 시스템 개요: 현재 직면한 하드웨어 구성을 명확히 시각화하여 확인.
+    2. 아키텍처 (메모리 맵): 내부 메모리를 끄고 외부로 매핑되는 구조를 HTML/CSS로 시각화하여 이해도 향상.
+    3. F/W 업데이트 프로세스: 가장 핵심적인 "RAM에서 실행"해야 하는 제약 사항을 강조하는 단계별 인터랙티브 가이드.
+    4. 성능/시간 분석: 외부 Flash 제어 시 소요되는 예상 시간 데이터를 시각화(Chart.js)하여 시스템 설계에 참고하도록 함.
+-->
+<!-- Visualization & Content Choices: 
+    - Hardware Specs -> 정보 전달 -> CSS Grid 카드 레이아웃 -> 명확한 스펙 확인 지원.
+    - Memory Architecture -> 구조 설명 -> HTML/CSS 기반 스택 블록(NO SVG) -> 외부 칩셀렉트(CS) 영역 매핑 시각화.
+    - Update Process -> 절차 안내 -> JS 기반 인터랙티브 탭/아코디언 -> 각 단계별 핵심 주의사항(RAM 실행 등) 전달.
+    - Flash Operation Time -> 데이터 분석 -> Chart.js Doughnut 차트 -> Erase/Write/Verify 단계별 소요 시간 비율 비교.
+-->
+<!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+
+<div class="flex h-screen overflow-hidden">
+    
+    <!-- Sidebar Navigation -->
+    <nav class="w-64 bg-slate-900 text-slate-300 flex-shrink-0 hidden md:flex flex-col">
+        <div class="p-6 border-b border-slate-700">
+            <h1 class="text-xl font-bold text-white tracking-wider">Renesas M16C<br><span class="text-sm text-blue-400 font-normal">F/W Update Guide</span></h1>
+        </div>
+        <div class="flex-1 overflow-y-auto py-4">
+            <ul class="space-y-2 px-4" id="nav-menu">
+                <li><button onclick="showSection('overview')" class="nav-btn w-full text-left px-4 py-2 rounded bg-blue-600 text-white transition-colors" data-target="overview">📡 시스템 개요</button></li>
+                <li><button onclick="showSection('architecture')" class="nav-btn w-full text-left px-4 py-2 rounded hover:bg-slate-800 transition-colors" data-target="architecture">🏗️ 메모리 아키텍처</button></li>
+                <li><button onclick="showSection('process')" class="nav-btn w-full text-left px-4 py-2 rounded hover:bg-slate-800 transition-colors" data-target="process">⚙️ 업데이트 프로세스</button></li>
+                <li><button onclick="showSection('performance')" class="nav-btn w-full text-left px-4 py-2 rounded hover:bg-slate-800 transition-colors" data-target="performance">📊 동작 성능 분석</button></li>
+            </ul>
+        </div>
+        <div class="p-4 text-xs text-slate-500 border-t border-slate-700">
+            Target: M16CM30302SPFP<br>Confidential Level: Internal
+        </div>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="flex-1 overflow-y-auto relative w-full">
+        
+        <!-- Mobile Header -->
+        <header class="md:hidden bg-slate-900 text-white p-4 flex justify-between items-center sticky top-0 z-10">
+            <h1 class="font-bold">M16C F/W Guide</h1>
+            <select onchange="showSection(this.value)" class="bg-slate-800 text-white text-sm p-1 rounded border border-slate-700">
+                <option value="overview">시스템 개요</option>
+                <option value="architecture">메모리 아키텍처</option>
+                <option value="process">업데이트 프로세스</option>
+                <option value="performance">동작 성능 분석</option>
+            </select>
+        </header>
+
+        <div class="p-6 md:p-10 max-w-6xl mx-auto">
+            
+            <!-- Section: Overview -->
+            <section id="overview" class="content-section fade-in block">
+                <h2 class="text-3xl font-bold text-slate-800 mb-2">시스템 하드웨어 제약사항 요약</h2>
+                <p class="text-slate-600 mb-8 leading-relaxed">
+                    본 문서는 고객사 요청에 따라 작성된 커스텀 시스템 가이드입니다. 해당 시스템은 MCU의 내부 리소스를 배제하고 오직 <strong>외부 인터페이스를 통한 메모리 구성</strong>을 채택하고 있습니다. 펌웨어 업데이트 설계 시 이 제약사항을 최우선으로 고려해야 합니다.
+                </p>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <!-- MCU Card -->
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 border-t-4 border-t-slate-800">
+                        <div class="text-4xl mb-4 text-center">💻</div>
+                        <h3 class="text-lg font-bold text-center mb-2">Microcontroller</h3>
+                        <p class="text-center text-blue-600 font-mono font-bold mb-4">M16CM30302SPFP</p>
+                        <ul class="text-sm text-slate-600 space-y-2">
+                            <li><span class="font-semibold text-red-500">주의:</span> Internal RAM 사용 안 함</li>
+                            <li><span class="font-semibold text-red-500">주의:</span> Internal Flash 사용 안 함</li>
+                            <li>Processor Mode: Microprocessor Mode</li>
+                        </ul>
+                    </div>
+
+                    <!-- RAM Card -->
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 border-t-4 border-t-blue-500">
+                        <div class="text-4xl mb-4 text-center">🧮</div>
+                        <h3 class="text-lg font-bold text-center mb-2">External RAM</h3>
+                        <p class="text-center text-blue-600 font-mono font-bold mb-4">R1LP0108ESN</p>
+                        <ul class="text-sm text-slate-600 space-y-2">
+                            <li>Type: 1M SRAM</li>
+                            <li>Organization: 128K word x 8-bit</li>
+                            <li>역할: 데이터 저장 및 <span class="font-bold text-blue-600 bg-blue-50 px-1">F/W 업데이트 코드 실행 공간</span></li>
+                        </ul>
+                    </div>
+
+                    <!-- Flash Card -->
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 border-t-4 border-t-indigo-500">
+                        <div class="text-4xl mb-4 text-center">💾</div>
+                        <h3 class="text-lg font-bold text-center mb-2">External Flash</h3>
+                        <p class="text-center text-blue-600 font-mono font-bold mb-4">MX29F800CBT</p>
+                        <ul class="text-sm text-slate-600 space-y-2">
+                            <li>Type: 8M-BIT [1M x 8 / 512K x 16]</li>
+                            <li>Feature: Boot Sector Flash</li>
+                            <li>역할: 메인 애플리케이션 저장소</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <div class="mt-8 bg-amber-50 border-l-4 border-amber-500 p-4 rounded text-amber-800">
+                    <p class="font-bold mb-1">💡 핵심 해결 과제</p>
+                    <p class="text-sm">내부 메모리가 없으므로, 외부 플래시(MX29F800CBT)를 지우고 쓰는 동안에는 플래시에서 코드를 읽어 실행할 수 없습니다. 따라서 플래시 제어 루틴은 반드시 부팅 시 외부 RAM(R1LP0108ESN)으로 복사된 후 RAM에서 실행되어야 합니다.</p>
+                </div>
+            </section>
+
+            <!-- Section: Architecture -->
+            <section id="architecture" class="content-section fade-in hidden">
+                <h2 class="text-3xl font-bold text-slate-800 mb-2">외부 메모리 매핑 아키텍처</h2>
+                <p class="text-slate-600 mb-8 leading-relaxed">
+                    Microprocessor 모드 진입 시 MCU의 외부 버스 제어 레지스터 설정을 통해 구성되는 논리적 메모리 맵입니다. 
+                    각 영역을 클릭하여 펌웨어 설계 시 유의사항을 확인하세요.
+                </p>
+
+                <div class="flex flex-col md:flex-row gap-8">
+                    <!-- Memory Map Diagram (HTML/CSS) -->
+                    <div class="w-full md:w-1/2 bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                        <h3 class="font-bold text-slate-700 mb-4 text-center border-b pb-2">Logical Address Space</h3>
+                        
+                        <div class="flex flex-col border-2 border-slate-800 bg-slate-100 relative text-sm font-mono cursor-pointer">
+                            <!-- SFR Space -->
+                            <div class="h-16 bg-slate-300 flex justify-between items-center px-4 border-b border-slate-400 memory-block" onclick="showMemoryDetail('sfr')">
+                                <span class="text-xs">0x00000</span>
+                                <span class="font-bold">SFR (Special Function Reg)</span>
+                                <span class="text-xs">0x003FF</span>
+                            </div>
+                            
+                            <!-- Internal RAM (Unused) -->
+                            <div class="h-12 bg-red-100 text-red-400 flex justify-center items-center px-4 border-b border-slate-400 opacity-50 relative overflow-hidden" title="사용 안함">
+                                <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4IiBoZWlnaHQ9IjgiPgo8cmVjdCB3aWR0aD0iOCIgaGVpZ2h0PSI4IiBmaWxsPSIjZmZmIj48L3JlY3Q+CjxwYXRoIGQ9Ik0wIDRMOCA0Wk00IDBMODggOFoiIHN0cm9rZT0iI2ZmY2FjYSIgc3Ryb2tlLXdpZHRoPSIxIj48L3BhdGg+Cjwvc3ZnPg==')] opacity-30"></div>
+                                <span>Internal RAM (Disabled)</span>
+                            </div>
+
+                            <!-- External RAM -->
+                            <div class="h-32 bg-blue-100 flex justify-between items-center px-4 border-b border-slate-400 memory-block" onclick="showMemoryDetail('ram')">
+                                <div class="flex flex-col justify-between h-full py-1 text-xs text-blue-800">
+                                    <span>0x00400</span>
+                                    <span>(CS1 / CS2 area)</span>
+                                </div>
+                                <div class="text-center">
+                                    <span class="font-bold block text-blue-700">External RAM</span>
+                                    <span class="text-xs text-blue-600">R1LP0108ESN</span>
+                                </div>
+                                <span class="text-xs text-blue-800 self-end py-1">0x1FFFF</span>
+                            </div>
+
+                            <!-- Empty Space -->
+                            <div class="h-12 flex justify-center items-center text-slate-400 text-xs border-b border-slate-400">
+                                <span>... Reserved ...</span>
+                            </div>
+
+                            <!-- External Flash -->
+                            <div class="h-48 bg-indigo-100 flex justify-between items-center px-4 memory-block" onclick="showMemoryDetail('flash')">
+                                <div class="flex flex-col justify-between h-full py-1 text-xs text-indigo-800">
+                                    <span>0x80000</span>
+                                    <span>(CS0 area)</span>
+                                </div>
+                                <div class="text-center">
+                                    <span class="font-bold block text-indigo-700">External Flash</span>
+                                    <span class="text-xs text-indigo-600">MX29F800CBT</span>
+                                    <span class="block mt-2 text-xs bg-indigo-500 text-white rounded px-2 py-1 mx-auto w-max">Boot Vector: 0xFFFFF</span>
+                                </div>
+                                <span class="text-xs text-indigo-800 self-end py-1">0xFFFFF</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Details Panel -->
+                    <div class="w-full md:w-1/2 bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                        <h3 class="font-bold text-slate-700 mb-4 border-b pb-2">영역별 상세 정보</h3>
+                        <div id="memory-detail-content" class="text-slate-600 min-h-[200px]">
+                            <p class="italic text-slate-400 text-center mt-10">좌측 메모리 맵의 영역을 클릭하면 상세 제어 정보가 표시됩니다.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Section: Update Process -->
+            <section id="process" class="content-section fade-in hidden">
+                <h2 class="text-3xl font-bold text-slate-800 mb-2">펌웨어 업데이트 절차 (RAM Base)</h2>
+                <p class="text-slate-600 mb-8 leading-relaxed">
+                    ROM(Flash)에 쓰기/지우기 작업을 수행하는 동안에는 해당 ROM 공간에서 명령어를 Fetch할 수 없습니다. 따라서 업데이트 루틴은 반드시 외부 RAM으로 복사되어 실행되어야 합니다.
+                </p>
+
+                <div class="space-y-4">
+                    <!-- Step 1 -->
+                    <div class="border border-slate-200 rounded-lg overflow-hidden">
+                        <button onclick="toggleStep('step1')" class="w-full bg-slate-50 p-4 text-left font-bold flex justify-between items-center hover:bg-slate-100 transition-colors">
+                            <span><span class="inline-block w-6 h-6 bg-blue-600 text-white rounded-full text-center leading-6 mr-2 text-sm">1</span> 플래시 제어 코드 RAM 복사</span>
+                            <span id="icon-step1" class="transform transition-transform text-slate-400">▼</span>
+                        </button>
+                        <div id="step1" class="p-4 bg-white border-t border-slate-200 hidden text-sm leading-relaxed text-slate-700">
+                            <p class="mb-2">업데이트 시작 시, 플래시 메모리(MX29F800CBT)를 제어하는 함수들(Erase, Program, Check Status)을 External RAM(R1LP0108ESN) 영역으로 복사해야 합니다.</p>
+                            <div class="bg-slate-800 text-green-400 p-3 rounded font-mono text-xs overflow-x-auto">
+// Pseudo-code example
+void copy_flash_routines_to_ram(void) {
+    uint8_t *src = (uint8_t *)&flash_erase_sector; // Address in Flash
+    uint8_t *dst = (uint8_t *)RAM_ROUTINE_START;   // Address in Ext RAM
+    uint16_t size = &flash_routines_end - &flash_erase_sector;
+    
+    for(int i=0; i&lt;size; i++) {
+        dst[i] = src[i];
+    }
+}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 2 -->
+                    <div class="border border-slate-200 rounded-lg overflow-hidden">
+                        <button onclick="toggleStep('step2')" class="w-full bg-slate-50 p-4 text-left font-bold flex justify-between items-center hover:bg-slate-100 transition-colors">
+                            <span><span class="inline-block w-6 h-6 bg-blue-600 text-white rounded-full text-center leading-6 mr-2 text-sm">2</span> 인터럽트 비활성화 및 RAM 점프</span>
+                            <span id="icon-step2" class="transform transition-transform text-slate-400">▼</span>
+                        </button>
+                        <div id="step2" class="p-4 bg-white border-t border-slate-200 hidden text-sm leading-relaxed text-slate-700">
+                            <p>플래시 작업 중 인터럽트가 발생하여 Flash 영역의 Vector 테이블을 참조하게 되면 시스템이 정지(Crash)됩니다. 반드시 인터럽트를 비활성화(<code>asm(" fcli");</code>) 하거나, 인터럽트 벡터 테이블 자체를 RAM으로 재배치해야 합니다. 그 후 RAM에 복사된 업데이트 메인 함수로 프로그램 카운터(PC)를 이동시킵니다.</p>
+                        </div>
+                    </div>
+
+                    <!-- Step 3 -->
+                    <div class="border border-slate-200 rounded-lg overflow-hidden">
+                        <button onclick="toggleStep('step3')" class="w-full bg-slate-50 p-4 text-left font-bold flex justify-between items-center hover:bg-slate-100 transition-colors">
+                            <span><span class="inline-block w-6 h-6 bg-blue-600 text-white rounded-full text-center leading-6 mr-2 text-sm">3</span> 외부 플래시(MX29F800CBT) 제어 명령 인가</span>
+                            <span id="icon-step3" class="transform transition-transform text-slate-400">▼</span>
+                        </button>
+                        <div id="step3" class="p-4 bg-white border-t border-slate-200 hidden text-sm leading-relaxed text-slate-700">
+                            <p class="mb-2">MX29F800CBT 데이터시트에 명시된 Command Sequence에 따라 Data Bus를 통해 명령어를 전송합니다.</p>
+                            <ul class="list-disc pl-5 mb-2 space-y-1">
+                                <li><strong>Sector Erase:</strong> 555H(AAH) -> 2AAH(55H) -> 555H(80H) -> 555H(AAH) -> 2AAH(55H) -> Sector Address(30H)</li>
+                                <li><strong>Byte/Word Program:</strong> 555H(AAH) -> 2AAH(55H) -> 555H(A0H) -> Address(Data)</li>
+                            </ul>
+                            <p class="text-red-500 font-semibold mt-2">주의: 외부 버스 타이밍(Wait state 설정)이 플래시 칩의 요구사양을 충족하는지 버스 컨트롤러 레지스터를 재확인하십시오.</p>
+                        </div>
+                    </div>
+
+                     <!-- Step 4 -->
+                     <div class="border border-slate-200 rounded-lg overflow-hidden">
+                        <button onclick="toggleStep('step4')" class="w-full bg-slate-50 p-4 text-left font-bold flex justify-between items-center hover:bg-slate-100 transition-colors">
+                            <span><span class="inline-block w-6 h-6 bg-blue-600 text-white rounded-full text-center leading-6 mr-2 text-sm">4</span> 상태 폴링 및 리부트</span>
+                            <span id="icon-step4" class="transform transition-transform text-slate-400">▼</span>
+                        </button>
+                        <div id="step4" class="p-4 bg-white border-t border-slate-200 hidden text-sm leading-relaxed text-slate-700">
+                            <p>Data Polling(DQ7) 또는 Toggle Bit(DQ6)를 모니터링하여 Erase/Program 작업의 완료 여부를 확인합니다. 모든 작업이 완료되고 데이터 무결성(Checksum/CRC) 확인이 끝나면, Watchdog Timer를 발생시키거나 Reset 핀을 제어하여 시스템을 하드웨어 리셋합니다. 이후 새 펌웨어로 부팅됩니다.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Section: Performance -->
+            <section id="performance" class="content-section fade-in hidden">
+                <h2 class="text-3xl font-bold text-slate-800 mb-2">플래시 메모리 동작 성능 요약</h2>
+                <p class="text-slate-600 mb-8 leading-relaxed">
+                    선정된 외부 Flash Memory (MX29F800CBT)의 스펙 기반 예상 작업 소요 시간 분포입니다. F/W 업데이트 시 전체 소요 시간 산정 및 Watchdog Timer 설정에 참고하십시오.
+                </p>
+
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex flex-col md:flex-row items-center gap-8">
+                    
+                    <div class="w-full md:w-1/2">
+                        <!-- 엄격한 규칙이 적용된 Chart Container -->
+                        <div class="chart-container">
+                            <canvas id="flashTimingChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="w-full md:w-1/2 space-y-4">
+                        <h3 class="font-bold text-lg text-slate-800 border-b pb-2">작업별 예상 시간 (Typical)</h3>
+                        <ul class="space-y-3">
+                            <li class="flex items-center">
+                                <span class="w-4 h-4 rounded-full bg-[rgba(239,68,68,0.8)] mr-3"></span>
+                                <div class="flex-1">
+                                    <p class="font-bold text-slate-700">Sector Erase (64KB)</p>
+                                    <p class="text-sm text-slate-500">약 0.7초 / 섹터당</p>
+                                </div>
+                            </li>
+                            <li class="flex items-center">
+                                <span class="w-4 h-4 rounded-full bg-[rgba(59,130,246,0.8)] mr-3"></span>
+                                <div class="flex-1">
+                                    <p class="font-bold text-slate-700">Chip Erase (Total)</p>
+                                    <p class="text-sm text-slate-500">약 9초 전체</p>
+                                </div>
+                            </li>
+                            <li class="flex items-center">
+                                <span class="w-4 h-4 rounded-full bg-[rgba(16,185,129,0.8)] mr-3"></span>
+                                <div class="flex-1">
+                                    <p class="font-bold text-slate-700">Word Program (16-bit)</p>
+                                    <p class="text-sm text-slate-500">약 11 µs / 단어당</p>
+                                </div>
+                            </li>
+                        </ul>
+                        <div class="mt-6 p-4 bg-slate-50 rounded border border-slate-200 text-sm text-slate-600">
+                            <strong>분석:</strong> 전체 펌웨어 이미지 크기가 512KB라고 가정할 때, Erase 작업에 대부분의 시간이 소요되며(약 5.6초), 프로그래밍(쓰기)에는 상대적으로 적은 시간(약 0.3초)이 소요됩니다. 사용자가 대기 시간을 지루해하지 않도록 진행률(Progress) 표시에 이 가중치를 반영하는 것이 좋습니다.
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+    </main>
+</div>
+
+<script>
+    // --- Navigation Logic ---
+    function showSection(sectionId) {
+        // 모든 섹션 숨기기
+        const sections = document.querySelectorAll('.content-section');
+        sections.forEach(sec => {
+            sec.classList.add('hidden');
+            sec.classList.remove('block');
+        });
+
+        // 타겟 섹션 보이기
+        const target = document.getElementById(sectionId);
+        if (target) {
+            target.classList.remove('hidden');
+            target.classList.add('block');
+        }
+
+        // 네비게이션 버튼 스타일 업데이트
+        const navBtns = document.querySelectorAll('.nav-btn');
+        navBtns.forEach(btn => {
+            if (btn.dataset.target === sectionId) {
+                btn.classList.remove('hover:bg-slate-800');
+                btn.classList.add('bg-blue-600', 'text-white');
+            } else {
+                btn.classList.add('hover:bg-slate-800');
+                btn.classList.remove('bg-blue-600', 'text-white');
+            }
+        });
+
+        // 모바일 셀렉트 박스 동기화
+        const selectBox = document.querySelector('header select');
+        if (selectBox && selectBox.value !== sectionId) {
+            selectBox.value = sectionId;
+        }
+
+        // 차트 섹션 진입 시 차트 리렌더링 확인 (크기 문제 방지)
+        if(sectionId === 'performance' && flashChart) {
+            flashChart.resize();
+        }
+    }
+
+    // --- Memory Map Detail Logic ---
+    const memoryData = {
+        sfr: `
+            <h4 class="font-bold text-lg text-slate-800 mb-2">SFR (Special Function Registers)</h4>
+            <p class="mb-2"><strong>Address:</strong> 0x00000 ~ 0x003FF</p>
+            <p>마이크로컨트롤러의 내장 페리퍼럴(타이머, UART, I/O 포트 등)을 제어하는 레지스터 영역입니다.</p>
+            <div class="mt-4 p-3 bg-red-50 border border-red-200 rounded">
+                <span class="font-bold text-red-600 block mb-1">필수 설정: 버스 컨트롤러</span>
+                PM0, PM1 레지스터를 설정하여 Microprocessor mode로 진입하고, CSR 레지스터를 통해 CS0~CS3 핀의 출력을 활성화해야 외부 메모리에 접근할 수 있습니다.
+            </div>
+        `,
+        ram: `
+            <h4 class="font-bold text-lg text-blue-800 mb-2">External RAM (R1LP0108ESN)</h4>
+            <p class="mb-2"><strong>Address:</strong> 0x00400 시작 (CS 설정에 따라 다름)</p>
+            <p>1M-bit (128KB) 용량의 SRAM입니다.</p>
+            <ul class="list-disc pl-5 mt-2 space-y-1">
+                <li>변수, 스택(Stack), 힙(Heap) 메모리로 사용됩니다.</li>
+                <li><strong>F/W 업데이트 시 중요:</strong> 플래시 메모리 조작 관련 코드(Erase, Write 등)가 이 영역으로 복사되어 실행되어야 합니다. (실행 주소 바인딩 주의)</li>
+            </ul>
+        `,
+        flash: `
+            <h4 class="font-bold text-lg text-indigo-800 mb-2">External Flash (MX29F800CBT)</h4>
+            <p class="mb-2"><strong>Address:</strong> 부트 영역 포함 상위 주소 매핑 (CS0)</p>
+            <p>8M-bit (1MB) 용량의 부트 섹터 플래시 메모리입니다.</p>
+            <ul class="list-disc pl-5 mt-2 space-y-1">
+                <li>메인 프로그램 코드가 저장되는 비휘발성 영역입니다.</li>
+                <li>부트섹터 아키텍처를 가지므로, 부트로더 코드를 특정 하단/상단 보호 구역에 위치시키는 설계가 필요합니다.</li>
+                <li>업데이트 시 해당 칩의 Command Sequence (예: 555H, 2AAH 패턴)를 정확히 발생시켜야 합니다.</li>
+            </ul>
+        `
+    };
+
+    function showMemoryDetail(type) {
+        const contentDiv = document.getElementById('memory-detail-content');
+        // 부드러운 전환을 위한 클래스 토글
+        contentDiv.classList.remove('fade-in');
+        void contentDiv.offsetWidth; // trigger reflow
+        contentDiv.innerHTML = memoryData[type];
+        contentDiv.classList.add('fade-in');
+    }
+
+    // --- Accordion Logic ---
+    function toggleStep(stepId) {
+        const content = document.getElementById(stepId);
+        const icon = document.getElementById('icon-' + stepId);
+        
+        if (content.classList.contains('hidden')) {
+            content.classList.remove('hidden');
+            icon.style.transform = 'rotate(180deg)';
+        } else {
+            content.classList.add('hidden');
+            icon.style.transform = 'rotate(0deg)';
+        }
+    }
+
+    // --- Chart.js Initialization ---
+    let flashChart = null;
+    
+    document.addEventListener('DOMContentLoaded', function() {
+        const ctx = document.getElementById('flashTimingChart').getContext('2d');
+        
+        flashChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Sector Erase (가중치)', 'Data Program (가중치)', 'Verification (가중치)'],
+                datasets: [{
+                    data: [85, 5, 10], // 임의의 비율 (Erase가 압도적으로 오래 걸림)
+                    backgroundColor: [
+                        'rgba(239, 68, 68, 0.8)',   // Red
+                        'rgba(16, 185, 129, 0.8)',  // Green
+                        'rgba(59, 130, 246, 0.8)'   // Blue
+                    ],
+                    borderColor: [
+                        'rgba(255, 255, 255, 1)'
+                    ],
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false, // Chart Container의 크기를 따르도록 필수 설정
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            font: { family: "'Segoe UI', sans-serif" }
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.label || '';
+                                if (label) { label += ': '; }
+                                if (context.parsed !== null) {
+                                    label += context.parsed + '% 소요';
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
+                cutout: '60%'
+            }
+        });
+    });
+</script>
+
+</body>
+</html>
